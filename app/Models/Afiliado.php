@@ -98,6 +98,7 @@ class Afiliado extends Model
                 'con.codigo_referencia',
                 'con.codigo_alternativo',
                 'con.id as ultimo_contrato_id',
+                'con.cod_titular as titular_persona_id',
                 'afit.tipo_afiliado',
                 'afi.matricula',
                 'afi.fecha_nac',

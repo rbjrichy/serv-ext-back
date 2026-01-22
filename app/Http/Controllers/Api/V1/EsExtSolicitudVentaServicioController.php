@@ -3,14 +3,17 @@
 namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
+use App\Models\Afiliado;
 use App\Models\EsextInstitucion;
 use App\Models\EsextServicio;
+use App\Models\EsextSolicitudVentaServicio;
+use Carbon\Carbon;
 use Exception;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
-use LDAP\Result;
+use Symfony\Component\HttpKernel\Exception\HttpException;
 
 class EsExtSolicitudVentaServicioController extends Controller
 {
@@ -58,61 +61,97 @@ class EsExtSolicitudVentaServicioController extends Controller
      * Crear una nueva institución
      */
     public function store(Request $request)
-    {
-        try {
-            $mensajes = [
-                'institucion.unique' => 'La :attribute ingresada ya se encuentra registrada en el sistema. Por favor, ingrese un nombre de institución diferente.',
-                'institucion.required' => 'El campo :attribute es obligatorio.',
-                'institucion.max' => 'El campo :attribute no debe exceder los 80 caracteres.',
-            ];
-            $validated = $request->validate([
-                'institucion' => 'required|string|max:80|unique:esext_instituciones,institucion',
-                'observaciones' => 'nullable|string|max:200',
-                'telefono' => 'nullable|string|max:80',
-                'direccion' => 'nullable|string|max:200',
-                // 'estado_id' => 'nullable|integer|exists:estado_ocurrencias,id',
-                'fecha_registro' => 'nullable|date',
-            ],$mensajes);
+{
+    try {
+        $mensajes = [
+            'entidad_id.required' => 'La entidad es obligatoria.',
+            'titular_persona_id.required' => 'El titular es obligatorio.',
+            'paciente_persona_id.required' => 'El paciente es obligatorio.',
+            'contrato_id.required' => 'El contrato es obligatorio.',
+            'fi_med_esps_id.required' => 'Debe seleccionar un médico especialista.',
+            'clasificacion_servicio_id.required' => 'Debe seleccionar la clasificación del servicio.',
+            'esext_servicio_institucion_id.required' => 'Debe seleccionar el servicio de la institución.',
+            'diagnostico.required' => 'El diagnóstico es obligatorio.',
+        ];
 
-            $user = Auth::getPayload()->get('user');
+        $validated = $request->validate([
+            'entidad_id' => 'required|integer|exists:entidads,id',
+            // 'titular_persona_id' => 'required|integer',
+            'paciente_persona_id' => 'required|integer',
+            // 'contrato_id' => 'required|integer',
+            'fi_med_esps_id' => 'required|integer',
+            'clasificacion_servicio_id' => 'required|integer|exists:clasificacion_servicios,id',
+            'esext_servicio_institucion_id' => 'required|integer|exists:esext_servicios_instituciones,id',
+            'observaciones' => 'nullable|string|max:800',
+            // 'estado_id' => 'nullable|integer|exists:estado_ocurrencias,id',
+            'fecha_solicitud' => 'required|date',
+            // 'usuario' => 'required|string|max:255',
+            'solicitante' => 'nullable|string|max:200',
+            'cargo' => 'nullable|string|max:200',
+            'diagnostico' => 'required|string|max:500',
+            'consulta_externa_id' => 'nullable|integer|exists:consulta_externas,id',
+        ], $mensajes);
 
-            // Mapear nombre -> institucion para la base de datos
-            $dbData = [
-                'institucion' => $validated['institucion'],
-                'observaciones' => $validated['observaciones'] ?? null,
-                'telefono' => $validated['telefono'] ?? null,
-                'direccion' => $validated['direccion'] ?? null,
-                'estado_id' => $validated['estado_id'] ?? 32, // Estado HABILITADO por defecto
-                'usr_alta' => $user,
-                'fecha_registro' => $validated['fecha_registro'] ?? now(),
-            ];
-
-            $institucion = EsextInstitucion::create($dbData);
-
-            // return response()->json($responseData, Response::HTTP_CREATED);
-            return response()->json([
-                'error' => false,
-                'data' => $institucion,
-                'mensaje' => 'Institución creada correctamente',
-                'status' => Response::HTTP_CREATED,
-            ],Response::HTTP_CREATED);
-
-        } catch (\Illuminate\Validation\ValidationException $e) {
-            return response()->json([
-                'error' => true,
-                'data' => null,
-                'mensaje' => 'error de validación '.$e->errors(),
-                'status' => Response::HTTP_UNPROCESSABLE_ENTITY
-            ], Response::HTTP_UNPROCESSABLE_ENTITY);
-        } catch (\Exception $e) {
-            return response()->json([
-                'error' => true,
-                'data' => null,
-                'mensaje' => 'Error al crear la institución '.$e->getMessage(),
-                'status' => Response::HTTP_INTERNAL_SERVER_ERROR
-            ], Response::HTTP_INTERNAL_SERVER_ERROR);
+        $datosPaciente = Afiliado::datos_paciente($request->paciente_persona_id);
+        if (!$datosPaciente) {
+            throw new HttpException(404, 'Afiliado no encontrado');
         }
+
+        $user = Auth::getPayload()->get('user');
+        $validated['usuario'] = $user;
+        $validated['titular_persona_id'] = $datosPaciente->titular_persona_id;
+        $validated['contrato_id'] = $datosPaciente->ultimo_contrato_id;
+        $validated['fecha_registro'] = Carbon::now();
+        $validated['estado_id'] = 32;
+
+
+        // return response()->json($validated);
+
+        // Mapear datos para la tabla esext_solicitudventaservicios
+        $dbData = [
+            'entidad_id' => $validated['entidad_id'],
+            'titular_persona_id' => $validated['titular_persona_id'],
+            'paciente_persona_id' => $validated['paciente_persona_id'],
+            'contrato_id' => $validated['contrato_id'],
+            'fi_med_esps_id' => $validated['fi_med_esps_id'],
+            'clasificacion_servicio_id' => $validated['clasificacion_servicio_id'],
+            'esext_servicio_institucion_id' => $validated['esext_servicio_institucion_id'],
+            'observaciones' => $validated['observaciones'] ?? null,
+            'estado_id' => $validated['estado_id'] , // habilitado por defecto
+            'fecha_registro' => $validated['fecha_registro'],
+            'fecha_solicitud' => $validated['fecha_solicitud'],
+            'usuario' => $validated['usuario'],
+            'solicitante' => $validated['solicitante'] ?? null,
+            'cargo' => $validated['cargo'] ?? null,
+            'diagnostico' => $validated['diagnostico'],
+            'consulta_externa_id' => $validated['consulta_externa_id'] ?? null,
+        ];
+
+        $solicitud = EsextSolicitudVentaServicio::create($dbData);
+
+        return response()->json([
+            'error' => false,
+            'data' => $solicitud,
+            'mensaje' => 'Solicitud creada correctamente',
+            'status' => Response::HTTP_CREATED,
+        ], Response::HTTP_CREATED);
+
+    } catch (\Illuminate\Validation\ValidationException $e) {
+        return response()->json([
+            'error' => true,
+            'data' => null,
+            'mensaje' => 'Error de validación, detalles: '.$e->errors(),
+            'status' => Response::HTTP_UNPROCESSABLE_ENTITY
+        ], Response::HTTP_UNPROCESSABLE_ENTITY);
+    } catch (\Exception $e) {
+        return response()->json([
+            'error' => true,
+            'data' => null,
+            'mensaje' => 'Error al crear la solicitud: '.$e->getMessage(),
+            'status' => Response::HTTP_INTERNAL_SERVER_ERROR
+        ], Response::HTTP_INTERNAL_SERVER_ERROR);
     }
+}
 
     /**
      * Mostrar una institución específica
